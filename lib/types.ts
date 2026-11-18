@@ -56,3 +56,39 @@ export interface Post {
 
 export type NewPost = Omit<Post, 'id' | 'createdAt' | 'updatedAt'>;
 export type CharacterPatch = Partial<Omit<Character, 'id' | 'slug' | 'assets' | 'updatedAt'>>;
+
+/* ---------- Générateur de concepts ---------- */
+
+export type ConceptStatus = 'idea' | 'kept' | 'scheduled';
+export const CONCEPT_STATUS_LABEL: Record<ConceptStatus, string> = {
+  idea: 'Idée',
+  kept: 'Gardé',
+  scheduled: 'Au calendrier',
+};
+
+export interface Concept {
+  id: string;
+  /** One character, or both for a crossover. */
+  characterIds: string[];
+  trend: string;
+  formatId: string;
+  title: string;
+  hook: string;
+  beats: string[];
+  caption: string;
+  hashtags: string[];
+  status: ConceptStatus;
+  /** Calendar post created from this concept, if any. */
+  postId: string;
+  /** 'claude' when written by the Claude API, 'local' for the built-in mixer. */
+  source: 'claude' | 'local';
+  createdAt: string;
+}
+
+export type NewConcept = Omit<Concept, 'id' | 'createdAt' | 'status' | 'postId'>;
+
+export interface Trend {
+  id: string;
+  label: string;
+  createdAt: string;
+}

@@ -11,7 +11,8 @@ Interface en verre liquide, construite avec les designs web du catalogue Process
 | Personnages : dossiers 3D, fiche éditable, visuels, vidéos et extraits de voix | ✅ |
 | Calendrier : créer, modifier, supprimer, glisser un post sur un autre jour | ✅ |
 | Revenus : planète des ventes (données d'exemple tant que Whop et Shopify ne sont pas branchés) | 🟡 |
-| Générateur de concepts, Concurrents | étape 3 |
+| Générateur de concepts : personnage(s) + tendance + format → idées prêtes à tourner, envoi en brouillon dans le calendrier | ✅ |
+| Concurrents | étape 3 |
 | Publication automatique sur TikTok, Instagram, Facebook, YouTube | étape 4 |
 
 ## Lancer en local
@@ -19,6 +20,7 @@ Interface en verre liquide, construite avec les designs web du catalogue Process
 ```bash
 npm install
 npm run dev
+npm test   # tests du générateur
 ```
 
 Sans configuration, les données vont dans `.data/db.json` et les fichiers dans `.data/uploads/`. Pas de mot de passe.
@@ -31,6 +33,12 @@ Sans configuration, les données vont dans `.data/db.json` et les fichiers dans 
 4. Redéployer. Les tables sont créées au premier chargement.
 
 Variables : voir `.env.example`.
+
+## Générateur de concepts
+
+Sans clé, les idées viennent d'un mixeur intégré (gratuit, hors ligne). Avec `ANTHROPIC_API_KEY` (clé sur [platform.claude.com](https://platform.claude.com)), c'est Claude qui les écrit, à partir des fiches personnages (univers, ton, répliques) : mieux tu remplis les fiches, meilleures sont les idées. Si Claude ne répond pas, le mixeur prend le relais.
+
+« Envoyer au calendrier » crée un brouillon sur le prochain créneau libre à partir de demain (18:00, puis 12:00 et 09:00 selon ton palier de 1, 2 ou 3 posts par jour).
 
 ## Données de la planète
 

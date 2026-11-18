@@ -1,6 +1,16 @@
-import { ComingSoon } from '@/components/ComingSoon';
+import { store } from '@/lib/store';
+import { claudeEnabled } from '@/lib/generate';
+import { ConceptLab } from './ConceptLab';
+
 export const metadata = { title: 'Générateur de concepts' };
-export default function Page() {
-  return <ComingSoon eyebrow="Atelier" title="Générateur de concepts" step="Étape 3"
-    text="Mixe un personnage, une tendance et un format pour obtenir un épisode prêt à produire, puis envoie-le directement en brouillon dans le calendrier." />;
+export const dynamic = 'force-dynamic';
+
+export default async function ConceptsPage() {
+  const [characters, concepts, trends, posts] = await Promise.all([
+    store().listCharacters(), store().listConcepts(), store().listTrends(), store().listPosts(),
+  ]);
+  const postDate = Object.fromEntries(posts.map(p => [p.id, p.date]));
+  // A concept whose calendar post was deleted goes back to "kept".
+  const list = concepts.map(c => (c.status === 'scheduled' && !postDate[c.postId] ? { ...c, status: 'kept' as const, postId: '' } : c));
+  return <ConceptLab characters={characters} concepts={list} trends={trends} postDate={postDate} claude={claudeEnabled()} />;
 }
