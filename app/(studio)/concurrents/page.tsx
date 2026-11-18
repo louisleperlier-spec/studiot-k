@@ -1,6 +1,11 @@
-import { ComingSoon } from '@/components/ComingSoon';
+import { store } from '@/lib/store';
+import { todayInStudio } from '@/lib/date';
+import { Watch } from './Watch';
+
 export const metadata = { title: 'Concurrents' };
-export default function Page() {
-  return <ComingSoon eyebrow="Veille" title="Concurrents" step="Étape 3"
-    text="Les comptes qui font des personnages IA proches des tiens, leurs formats qui marchent et leur croissance, analysés avec Process." />;
+export const dynamic = 'force-dynamic';
+
+export default async function ConcurrentsPage() {
+  const [competitors, spots] = await Promise.all([store().listCompetitors(), store().listSpots()]);
+  return <Watch competitors={competitors} spots={spots} today={todayInStudio()} />;
 }

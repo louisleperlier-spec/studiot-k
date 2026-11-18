@@ -14,6 +14,9 @@ interface Props {
   trends: Trend[];
   postDate: Record<string, string>;
   claude: boolean;
+  /** Prefill from a competitor's spotted video. */
+  initialTrend?: string;
+  initialFormat?: string;
 }
 
 type Filter = 'all' | ConceptStatus;
@@ -23,10 +26,10 @@ const FILTERS: { id: Filter; label: string }[] = [
   { id: 'scheduled', label: 'Au calendrier' },
 ];
 
-export function ConceptLab({ characters, concepts, trends, postDate, claude }: Props) {
+export function ConceptLab({ characters, concepts, trends, postDate, claude, initialTrend = '', initialFormat }: Props) {
   const [res, action, pending] = useActionState(generateAction, null);
-  const [trend, setTrend] = useState('');
-  const [formatId, setFormatId] = useState(FORMATS[0].id);
+  const [trend, setTrend] = useState(initialTrend);
+  const [formatId, setFormatId] = useState(initialFormat ?? FORMATS[0].id);
   const [filter, setFilter] = useState<Filter>('all');
   const [, startTrend] = useTransition();
   const byId = useMemo(() => Object.fromEntries(characters.map(c => [c.id, c])), [characters]);

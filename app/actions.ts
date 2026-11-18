@@ -6,6 +6,7 @@ import { NETWORKS, type Network, type NewPost, type PostStatus } from '@/lib/typ
 import { formatById, nextFreeSlot, postCaption, rampStep } from '@/lib/concepts';
 import { generateConcepts } from '@/lib/generate';
 import { formatLongFr, todayInStudio } from '@/lib/date';
+import { fromUrl, parseViews, safeUrl } from '@/lib/watch';
 
 export type ActionResult = { ok: true; message: string } | { ok: false; message: string } | null;
 
@@ -146,4 +147,48 @@ export async function scheduleConcept(id: string): Promise<ActionResult> {
 export async function removeTrend(id: string) {
   await store().removeTrend(id);
   revalidatePath('/concepts');
+}
+
+/* ---------- Veille concurrents ---------- */
+
+export async function saveCompetitor(_prev: ActionResult, form: FormData): Promise<ActionResult> {
+  const id = str(form, 'id', 64) || null;
+  const name = str(form, 'name', 80);
+  const url = safeUrl(str(form, 'url', 500));
+  const guessed = fromUrl(url);
+  const network = (NETWORKS as readonly string[]).includes(str(form, 'network', 20)) ? (str(form, 'network', 20) as Network) : guessed.network ?? 'tiktok';
+  let handle = str(form, 'handle', 80) || guessed.handle || '';
+  if (handle && !handle.startsWith('@')) handle = `@${handle}`;
+  if (!name && !handle) return { ok: false, message: 'Donne au moins un nom ou un @.' };
+  await store().saveCompetitor(id, { name: name || handle, network, handle, url, niche: str(form, 'niche', 200), notes: str(form, 'notes') });
+  revalidatePath('/concurrents');
+  return { ok: true, message: id ? 'Compte mis à jour.' : 'Compte ajouté.' };
+}
+
+export async function deleteCompetitor(id: string) {
+  await store().deleteCompetitor(id);
+  revalidatePath('/concurrents');
+}
+
+export async function saveSpot(_prev: ActionResult, form: FormData): Promise<ActionResult> {
+  const id = str(form, 'id', 64) || null;
+  const competitorId = str(form, 'competitorId', 64);
+  const title = str(form, 'title', 200);
+  const date = str(form, 'date', 10);
+  const formatId = str(form, 'formatId', 40);
+  const rawViews = str(form, 'views', 40);
+  const views = rawViews ? parseViews(rawViews) : null;
+  if (!(await store().listCompetitors()).some(c => c.id === competitorId)) return { ok: false, message: 'Choisis un compte.' };
+  if (!title) return { ok: false, message: 'Décris la vidéo en quelques mots.' };
+  if (!formatById(formatId)) return { ok: false, message: 'Choisis un format.' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { ok: false, message: 'Date invalide.' };
+  if (rawViews && views === null) return { ok: false, message: 'Vues illisibles : écris par exemple 12000, 12k ou 1,2 M.' };
+  await store().saveSpot(id, { competitorId, title, url: safeUrl(str(form, 'url', 500)), formatId, views, hook: str(form, 'hook', 400), note: str(form, 'note'), date });
+  revalidatePath('/concurrents');
+  return { ok: true, message: id ? 'Repérage mis à jour.' : 'Repérage ajouté.' };
+}
+
+export async function deleteSpot(id: string) {
+  await store().deleteSpot(id);
+  revalidatePath('/concurrents');
 }

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { seedCharacters } from './seed';
-import type { Asset, Character, CharacterPatch, Concept, ConceptStatus, NewConcept, NewPost, Post, Trend } from './types';
+import type { Asset, Character, CharacterPatch, Competitor, Concept, ConceptStatus, NewCompetitor, NewConcept, NewPost, NewSpot, Post, Spot, Trend } from './types';
 
 /**
  * Data layer. Uses Postgres when DATABASE_URL is set (production on Vercel),
@@ -28,7 +28,16 @@ export interface Store {
   listTrends(): Promise<Trend[]>;
   addTrend(label: string): Promise<void>;
   removeTrend(id: string): Promise<void>;
+  listCompetitors(): Promise<Competitor[]>;
+  saveCompetitor(id: string | null, c: NewCompetitor): Promise<void>;
+  /** Also deletes its spotted videos. */
+  deleteCompetitor(id: string): Promise<void>;
+  listSpots(): Promise<Spot[]>;
+  saveSpot(id: string | null, s: NewSpot): Promise<void>;
+  deleteSpot(id: string): Promise<void>;
 }
+
+const bySpotDate = (a: Spot, b: Spot) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt);
 
 const newestFirst = (a: { createdAt: string }, b: { createdAt: string }) => b.createdAt.localeCompare(a.createdAt);
 
@@ -37,7 +46,7 @@ const byDateTime = (a: Post, b: Post) => (a.date + a.time).localeCompare(b.date 
 
 /* ---------------- JSON file (dev) ---------------- */
 
-interface Db { characters: Character[]; posts: Post[]; concepts?: Concept[]; trends?: Trend[] }
+interface Db { characters: Character[]; posts: Post[]; concepts?: Concept[]; trends?: Trend[]; competitors?: Competitor[]; spots?: Spot[] }
 
 class FileStore implements Store {
   private file = path.join(process.cwd(), '.data', 'db.json');
@@ -119,6 +128,31 @@ class FileStore implements Store {
   async removeTrend(id: string) {
     await this.mutate(db => { db.trends = (db.trends ?? []).filter(t => t.id !== id); });
   }
+  async listCompetitors() { return [...((await this.read()).competitors ?? [])].sort((a, b) => a.name.localeCompare(b.name, 'fr')); }
+  async saveCompetitor(id: string | null, c: NewCompetitor) {
+    await this.mutate(db => {
+      const list = (db.competitors ??= []);
+      const cur = id ? list.find(x => x.id === id) : undefined;
+      if (cur) Object.assign(cur, c); else list.push({ ...c, id: randomUUID(), createdAt: now() });
+    });
+  }
+  async deleteCompetitor(id: string) {
+    await this.mutate(db => {
+      db.competitors = (db.competitors ?? []).filter(c => c.id !== id);
+      db.spots = (db.spots ?? []).filter(s => s.competitorId !== id);
+    });
+  }
+  async listSpots() { return [...((await this.read()).spots ?? [])].sort(bySpotDate); }
+  async saveSpot(id: string | null, sp: NewSpot) {
+    await this.mutate(db => {
+      const list = (db.spots ??= []);
+      const cur = id ? list.find(x => x.id === id) : undefined;
+      if (cur) Object.assign(cur, sp); else list.push({ ...sp, id: randomUUID(), createdAt: now() });
+    });
+  }
+  async deleteSpot(id: string) {
+    await this.mutate(db => { db.spots = (db.spots ?? []).filter(s => s.id !== id); });
+  }
 }
 
 /* ---------------- Postgres (prod) ---------------- */
@@ -151,6 +185,13 @@ class PgStore implements Store {
       await sql`create table if not exists trends (
         id uuid primary key, label text not null, created_at timestamptz not null default now())`;
       await sql`create unique index if not exists trends_label_idx on trends(lower(label))`;
+      await sql`create table if not exists competitors (
+        id uuid primary key, name text not null, network text not null, handle text not null default '', url text not null default '',
+        niche text not null default '', notes text not null default '', created_at timestamptz not null default now())`;
+      await sql`create table if not exists spots (
+        id uuid primary key, competitor_id uuid not null references competitors(id) on delete cascade,
+        title text not null, url text not null default '', format_id text not null, views bigint,
+        hook text not null default '', note text not null default '', date date not null, created_at timestamptz not null default now())`;
       for (const c of seedCharacters(now())) {
         await sql`insert into characters (id, slug, name, color) values (${c.id}, ${c.slug}, ${c.name}, ${c.color}) on conflict (id) do nothing`;
       }
@@ -176,6 +217,16 @@ class PgStore implements Store {
     title: r.title as string, hook: r.hook as string, beats: (r.beats as string[]) ?? [], caption: r.caption as string,
     hashtags: r.hashtags as string[], status: r.status as ConceptStatus, postId: r.post_id as string,
     source: r.source as Concept['source'], createdAt: new Date(r.created_at as string).toISOString(),
+  });
+
+  private toCompetitor = (r: Record<string, unknown>): Competitor => ({
+    id: r.id as string, name: r.name as string, network: r.network as Competitor['network'], handle: r.handle as string,
+    url: r.url as string, niche: r.niche as string, notes: r.notes as string, createdAt: new Date(r.created_at as string).toISOString(),
+  });
+  private toSpot = (r: Record<string, unknown>): Spot => ({
+    id: r.id as string, competitorId: r.competitor_id as string, title: r.title as string, url: r.url as string,
+    formatId: r.format_id as string, views: r.views === null ? null : Number(r.views), hook: r.hook as string, note: r.note as string,
+    date: r.date as string, createdAt: new Date(r.created_at as string).toISOString(),
   });
 
   async listCharacters() {
@@ -288,6 +339,34 @@ class PgStore implements Store {
   async removeTrend(id: string) {
     await this.init();
     await this.sql`delete from trends where id = ${id}`;
+  }
+  async listCompetitors() {
+    await this.init();
+    return (await this.sql`select * from competitors order by lower(name)`).map(this.toCompetitor);
+  }
+  async saveCompetitor(id: string | null, c: NewCompetitor) {
+    await this.init();
+    if (id) await this.sql`update competitors set name = ${c.name}, network = ${c.network}, handle = ${c.handle}, url = ${c.url}, niche = ${c.niche}, notes = ${c.notes} where id = ${id}`;
+    else await this.sql`insert into competitors (id, name, network, handle, url, niche, notes) values (${randomUUID()}, ${c.name}, ${c.network}, ${c.handle}, ${c.url}, ${c.niche}, ${c.notes})`;
+  }
+  async deleteCompetitor(id: string) {
+    await this.init();
+    await this.sql`delete from competitors where id = ${id}`;
+  }
+  async listSpots() {
+    await this.init();
+    return (await this.sql`select *, to_char(date, 'YYYY-MM-DD') as date from spots order by date desc, created_at desc limit 500`).map(this.toSpot);
+  }
+  async saveSpot(id: string | null, sp: NewSpot) {
+    await this.init();
+    if (id) await this.sql`update spots set competitor_id = ${sp.competitorId}, title = ${sp.title}, url = ${sp.url}, format_id = ${sp.formatId},
+      views = ${sp.views}, hook = ${sp.hook}, note = ${sp.note}, date = ${sp.date} where id = ${id}`;
+    else await this.sql`insert into spots (id, competitor_id, title, url, format_id, views, hook, note, date)
+      values (${randomUUID()}, ${sp.competitorId}, ${sp.title}, ${sp.url}, ${sp.formatId}, ${sp.views}, ${sp.hook}, ${sp.note}, ${sp.date})`;
+  }
+  async deleteSpot(id: string) {
+    await this.init();
+    await this.sql`delete from spots where id = ${id}`;
   }
 }
 
