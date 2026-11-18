@@ -12,7 +12,7 @@ Interface en verre liquide, construite avec les designs web du catalogue Process
 | Calendrier : créer, modifier, supprimer, glisser un post sur un autre jour | ✅ |
 | Revenus : planète des ventes (données d'exemple tant que Whop et Shopify ne sont pas branchés) | 🟡 |
 | Générateur de concepts : personnage(s) + tendance + format → idées prêtes à tourner, envoi en brouillon dans le calendrier | ✅ |
-| Concurrents | étape 3 |
+| Concurrents : comptes suivis, vidéos repérées (format, vues, accroche), formats qui marchent, « En faire un concept » | ✅ |
 | Publication automatique sur TikTok, Instagram, Facebook, YouTube | étape 4 |
 
 ## Lancer en local

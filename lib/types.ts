@@ -92,3 +92,34 @@ export interface Trend {
   label: string;
   createdAt: string;
 }
+
+/* ---------- Veille concurrents ---------- */
+
+export interface Competitor {
+  id: string;
+  name: string;
+  network: Network;
+  handle: string;
+  url: string;
+  niche: string;
+  notes: string;
+  createdAt: string;
+}
+export type NewCompetitor = Omit<Competitor, 'id' | 'createdAt'>;
+
+/** A competitor video worth remembering: what it is, how it did, why it works. */
+export interface Spot {
+  id: string;
+  competitorId: string;
+  title: string;
+  url: string;
+  formatId: string;
+  /** null when unknown. */
+  views: number | null;
+  hook: string;
+  note: string;
+  /** Day it was posted or spotted, YYYY-MM-DD. */
+  date: string;
+  createdAt: string;
+}
+export type NewSpot = Omit<Spot, 'id' | 'createdAt'>;
