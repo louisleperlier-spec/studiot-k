@@ -2,12 +2,10 @@ import Link from 'next/link';
 import { GlassPanel } from '@/components/process/web-liquid-glass/LiquidGlass';
 import { Nets, Who, thumb } from '@/components/bits';
 import { store } from '@/lib/store';
-import { addDays, formatLongFr, todayInStudio } from '@/lib/date';
+import { formatLongFr, todayInStudio } from '@/lib/date';
+import { RAMP_STEPS as STEPS, rampStep } from '@/lib/concepts';
 
 export const dynamic = 'force-dynamic';
-
-/** Paliers de rythme : 1 post par jour, puis 2, puis 3. */
-const STEPS = [1, 2, 3];
 
 export default async function HomePage() {
   const today = todayInStudio();
@@ -16,9 +14,7 @@ export default async function HomePage() {
   const upcoming = posts.filter(p => p.date >= today && p.status !== 'published').slice(0, 6);
   const scheduled = posts.filter(p => p.status === 'scheduled' && p.date >= today);
   const lastScheduled = scheduled.at(-1)?.date;
-  const week = Array.from({ length: 7 }, (_, i) => addDays(today, -i));
-  const perDayLastWeek = posts.filter(p => week.includes(p.date) && p.status !== 'draft').length / 7;
-  const current = STEPS.reduce((acc, s) => (perDayLastWeek >= s ? s : acc), 1);
+  const { perDay: perDayLastWeek, step: current } = rampStep(posts, today);
   const daysCovered = lastScheduled ? Math.max(0, Math.round((new Date(lastScheduled).getTime() - new Date(today).getTime()) / 864e5) + 1) : 0;
   const failed = posts.filter(p => p.status === 'failed').length;
 

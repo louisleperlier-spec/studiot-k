@@ -3,6 +3,9 @@ import { revalidatePath } from 'next/cache';
 import { store } from '@/lib/store';
 import { kindOf, saveUpload } from '@/lib/upload';
 import { NETWORKS, type Network, type NewPost, type PostStatus } from '@/lib/types';
+import { formatById, nextFreeSlot, postCaption, rampStep } from '@/lib/concepts';
+import { generateConcepts } from '@/lib/generate';
+import { formatLongFr, todayInStudio } from '@/lib/date';
 
 export type ActionResult = { ok: true; message: string } | { ok: false; message: string } | null;
 
@@ -88,4 +91,59 @@ export async function movePost(id: string, date: string) {
 export async function deletePost(id: string) {
   await store().deletePost(id);
   revalidatePath('/', 'layout');
+}
+
+/* ---------- Générateur de concepts ---------- */
+
+export type GenerateResult = { ok: true; message: string; ids: string[] } | { ok: false; message: string } | null;
+
+export async function generateAction(_prev: GenerateResult, form: FormData): Promise<GenerateResult> {
+  const characters = await store().listCharacters();
+  const picked = form.getAll('characterIds').map(String);
+  const chosen = characters.filter(c => picked.includes(c.id));
+  const trend = str(form, 'trend', 200);
+  const format = formatById(str(form, 'formatId', 40));
+  const count = Math.min(5, Math.max(1, Number(str(form, 'count', 2)) || 3));
+  if (!chosen.length) return { ok: false, message: 'Choisis au moins un personnage.' };
+  if (!trend) return { ok: false, message: 'Écris ou choisis une tendance.' };
+  if (!format) return { ok: false, message: 'Choisis un format.' };
+
+  const { concepts, note } = await generateConcepts({ characters: chosen, trend, format, twist: str(form, 'twist', 300), count });
+  const saved = await store().createConcepts(concepts);
+  if (form.get('saveTrend') === 'on') await store().addTrend(trend);
+  revalidatePath('/concepts');
+  return { ok: true, message: note ?? `${saved.length} concepts prêts.`, ids: saved.map(c => c.id) };
+}
+
+export async function setConceptStatus(id: string, status: 'idea' | 'kept') {
+  await store().updateConcept(id, { status });
+  revalidatePath('/concepts');
+}
+
+export async function deleteConcept(id: string) {
+  await store().deleteConcept(id);
+  revalidatePath('/concepts');
+}
+
+/** Sends a concept to the calendar as a draft, on the next free slot for the current ramp step. */
+export async function scheduleConcept(id: string): Promise<ActionResult> {
+  const c = await store().getConcept(id);
+  if (!c) return { ok: false, message: 'Concept introuvable.' };
+  const posts = await store().listPosts();
+  if (c.postId && posts.some(p => p.id === c.postId)) return { ok: false, message: 'Ce concept est déjà dans le calendrier.' };
+  const today = todayInStudio();
+  const { step } = rampStep(posts, today);
+  const slot = nextFreeSlot(posts, today, step);
+  const post = await store().createPost({
+    characterId: c.characterIds[0], title: c.title, caption: postCaption(c),
+    date: slot.date, time: slot.time, networks: [...NETWORKS], status: 'draft', mediaUrl: '',
+  });
+  await store().updateConcept(id, { status: 'scheduled', postId: post.id });
+  revalidatePath('/', 'layout');
+  return { ok: true, message: `${formatLongFr(slot.date)} à ${slot.time}` };
+}
+
+export async function removeTrend(id: string) {
+  await store().removeTrend(id);
+  revalidatePath('/concepts');
 }

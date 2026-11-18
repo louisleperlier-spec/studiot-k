@@ -4,7 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { seedCharacters } from './seed';
-import type { Asset, Character, CharacterPatch, NewPost, Post } from './types';
+import type { Asset, Character, CharacterPatch, Concept, ConceptStatus, NewConcept, NewPost, Post, Trend } from './types';
 
 /**
  * Data layer. Uses Postgres when DATABASE_URL is set (production on Vercel),
@@ -20,14 +20,24 @@ export interface Store {
   createPost(p: NewPost): Promise<Post>;
   updatePost(id: string, patch: Partial<NewPost>): Promise<void>;
   deletePost(id: string): Promise<void>;
+  listConcepts(): Promise<Concept[]>;
+  getConcept(id: string): Promise<Concept | null>;
+  createConcepts(list: NewConcept[]): Promise<Concept[]>;
+  updateConcept(id: string, patch: { status?: ConceptStatus; postId?: string }): Promise<void>;
+  deleteConcept(id: string): Promise<void>;
+  listTrends(): Promise<Trend[]>;
+  addTrend(label: string): Promise<void>;
+  removeTrend(id: string): Promise<void>;
 }
+
+const newestFirst = (a: { createdAt: string }, b: { createdAt: string }) => b.createdAt.localeCompare(a.createdAt);
 
 const now = () => new Date().toISOString();
 const byDateTime = (a: Post, b: Post) => (a.date + a.time).localeCompare(b.date + b.time);
 
 /* ---------------- JSON file (dev) ---------------- */
 
-interface Db { characters: Character[]; posts: Post[] }
+interface Db { characters: Character[]; posts: Post[]; concepts?: Concept[]; trends?: Trend[] }
 
 class FileStore implements Store {
   private file = path.join(process.cwd(), '.data', 'db.json');
@@ -82,6 +92,33 @@ class FileStore implements Store {
   async deletePost(id: string) {
     await this.mutate(db => { db.posts = db.posts.filter(p => p.id !== id); });
   }
+  async listConcepts() { return [...((await this.read()).concepts ?? [])].sort(newestFirst); }
+  async getConcept(id: string) { return (await this.read()).concepts?.find(c => c.id === id) ?? null; }
+  async createConcepts(list: NewConcept[]) {
+    return this.mutate(db => {
+      const at = Date.now();
+      // Stagger timestamps so a batch keeps its order when sorted newest first.
+      const out = list.map((c, i): Concept => ({ ...c, id: randomUUID(), status: 'idea', postId: '', createdAt: new Date(at - i).toISOString() }));
+      (db.concepts ??= []).push(...out);
+      return out;
+    });
+  }
+  async updateConcept(id: string, patch: { status?: ConceptStatus; postId?: string }) {
+    await this.mutate(db => { const c = db.concepts?.find(x => x.id === id); if (c) Object.assign(c, patch); });
+  }
+  async deleteConcept(id: string) {
+    await this.mutate(db => { db.concepts = (db.concepts ?? []).filter(c => c.id !== id); });
+  }
+  async listTrends() { return [...((await this.read()).trends ?? [])].sort(newestFirst); }
+  async addTrend(label: string) {
+    await this.mutate(db => {
+      const list = (db.trends ??= []);
+      if (!list.some(t => t.label.toLowerCase() === label.toLowerCase())) list.push({ id: randomUUID(), label, createdAt: now() });
+    });
+  }
+  async removeTrend(id: string) {
+    await this.mutate(db => { db.trends = (db.trends ?? []).filter(t => t.id !== id); });
+  }
 }
 
 /* ---------------- Postgres (prod) ---------------- */
@@ -106,6 +143,14 @@ class PgStore implements Store {
         networks text[] not null default '{}', status text not null, media_url text not null default '',
         created_at timestamptz not null default now(), updated_at timestamptz not null default now())`;
       await sql`create index if not exists posts_date_idx on posts(date)`;
+      await sql`create table if not exists concepts (
+        id uuid primary key, character_ids text[] not null default '{}', trend text not null default '',
+        format_id text not null, title text not null, hook text not null default '', beats jsonb not null default '[]'::jsonb,
+        caption text not null default '', hashtags text[] not null default '{}', status text not null default 'idea',
+        post_id text not null default '', source text not null default 'local', created_at timestamptz not null default now())`;
+      await sql`create table if not exists trends (
+        id uuid primary key, label text not null, created_at timestamptz not null default now())`;
+      await sql`create unique index if not exists trends_label_idx on trends(lower(label))`;
       for (const c of seedCharacters(now())) {
         await sql`insert into characters (id, slug, name, color) values (${c.id}, ${c.slug}, ${c.name}, ${c.color}) on conflict (id) do nothing`;
       }
@@ -124,6 +169,13 @@ class PgStore implements Store {
     date: r.date as string, time: r.time as string, networks: r.networks as Post['networks'], status: r.status as Post['status'],
     mediaUrl: r.media_url as string,
     createdAt: new Date(r.created_at as string).toISOString(), updatedAt: new Date(r.updated_at as string).toISOString(),
+  });
+
+  private toConcept = (r: Record<string, unknown>): Concept => ({
+    id: r.id as string, characterIds: r.character_ids as string[], trend: r.trend as string, formatId: r.format_id as string,
+    title: r.title as string, hook: r.hook as string, beats: (r.beats as string[]) ?? [], caption: r.caption as string,
+    hashtags: r.hashtags as string[], status: r.status as ConceptStatus, postId: r.post_id as string,
+    source: r.source as Concept['source'], createdAt: new Date(r.created_at as string).toISOString(),
   });
 
   async listCharacters() {
@@ -188,6 +240,54 @@ class PgStore implements Store {
   async deletePost(id: string) {
     await this.init();
     await this.sql`delete from posts where id = ${id}`;
+  }
+  async listConcepts() {
+    await this.init();
+    return (await this.sql`select * from concepts order by created_at desc limit 300`).map(this.toConcept);
+  }
+  async getConcept(id: string) {
+    await this.init();
+    const [r] = await this.sql`select * from concepts where id = ${id}`;
+    return r ? this.toConcept(r) : null;
+  }
+  async createConcepts(list: NewConcept[]) {
+    await this.init();
+    const at = Date.now();
+    const out: Concept[] = [];
+    for (const [i, c] of list.entries()) {
+      const [r] = await this.sql`insert into concepts (id, character_ids, trend, format_id, title, hook, beats, caption, hashtags, source, created_at)
+        values (${randomUUID()}, ${c.characterIds}, ${c.trend}, ${c.formatId}, ${c.title}, ${c.hook}, ${this.sql.json(c.beats)}::jsonb,
+          ${c.caption}, ${c.hashtags}, ${c.source}, ${new Date(at - i).toISOString()})
+        returning *`;
+      out.push(this.toConcept(r));
+    }
+    return out;
+  }
+  async updateConcept(id: string, p: { status?: ConceptStatus; postId?: string }) {
+    await this.init();
+    const cols: Record<string, string> = {};
+    if (p.status !== undefined) cols.status = p.status;
+    if (p.postId !== undefined) cols.post_id = p.postId;
+    if (!Object.keys(cols).length) return;
+    await this.sql`update concepts set ${this.sql(cols)} where id = ${id}`;
+  }
+  async deleteConcept(id: string) {
+    await this.init();
+    await this.sql`delete from concepts where id = ${id}`;
+  }
+  async listTrends() {
+    await this.init();
+    return (await this.sql`select * from trends order by created_at desc`).map(r => ({
+      id: r.id as string, label: r.label as string, createdAt: new Date(r.created_at as string).toISOString(),
+    }));
+  }
+  async addTrend(label: string) {
+    await this.init();
+    await this.sql`insert into trends (id, label) values (${randomUUID()}, ${label}) on conflict do nothing`;
+  }
+  async removeTrend(id: string) {
+    await this.init();
+    await this.sql`delete from trends where id = ${id}`;
   }
 }
 
