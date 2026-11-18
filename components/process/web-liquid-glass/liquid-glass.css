@@ -1,0 +1,95 @@
+/* Liquid Glass — tint, backdrop (blur + saturate, + SVG rim refraction on
+   Chromium), specular inset highlights, inner/outer shade. */
+.tk-lg {
+  --tk-lg-rgb: 255 255 255;
+  --tk-lg-alpha: 0.58;
+  --tk-lg-hi: 255 255 255;
+  --tk-lg-hi-a: 0.85;
+  --tk-lg-shade: 12 12 16;
+  --tk-lg-shade-a: 0.1;
+  --tk-lg-blur: 18px;
+  --tk-lg-sat: 1.7;
+  --tk-lg-ink: #0a0a0a;
+  position: relative;
+  color: var(--tk-lg-ink);
+  background: rgb(var(--tk-lg-rgb) / var(--tk-lg-alpha));
+  -webkit-backdrop-filter: blur(var(--tk-lg-blur)) saturate(var(--tk-lg-sat));
+  backdrop-filter: blur(var(--tk-lg-blur)) saturate(var(--tk-lg-sat));
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--tk-lg-hi) / calc(var(--tk-lg-hi-a) * 0.35)),
+    inset 1.5px 2.5px 0 -1.5px rgb(var(--tk-lg-hi) / var(--tk-lg-hi-a)),
+    inset -1.5px -2px 0 -1.5px rgb(var(--tk-lg-hi) / calc(var(--tk-lg-hi-a) * 0.75)),
+    inset -2px -6px 1px -5px rgb(var(--tk-lg-hi) / calc(var(--tk-lg-hi-a) * 0.5)),
+    inset 0 3px 4px -2px rgb(var(--tk-lg-shade) / calc(var(--tk-lg-shade-a) * 0.6)),
+    inset 2px -6px 1px -4px rgb(var(--tk-lg-shade) / calc(var(--tk-lg-shade-a) * 0.3)),
+    0 1px 3px rgb(var(--tk-lg-shade) / calc(var(--tk-lg-shade-a) * 0.6)),
+    0 8px 24px rgb(var(--tk-lg-shade) / calc(var(--tk-lg-shade-a) * 0.5));
+}
+
+:root[data-theme="dark"] .tk-lg {
+  --tk-lg-rgb: 26 26 30;
+  --tk-lg-alpha: 0.55;
+  --tk-lg-hi-a: 0.22;
+  --tk-lg-shade: 0 0 0;
+  --tk-lg-shade-a: 0.55;
+  --tk-lg-blur: 20px;
+  --tk-lg-sat: 1.5;
+  --tk-lg-ink: #fafafa;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .tk-lg {
+    --tk-lg-rgb: 26 26 30;
+    --tk-lg-alpha: 0.55;
+    --tk-lg-hi-a: 0.22;
+    --tk-lg-shade: 0 0 0;
+    --tk-lg-shade-a: 0.55;
+    --tk-lg-blur: 20px;
+    --tk-lg-sat: 1.5;
+    --tk-lg-ink: #fafafa;
+  }
+}
+
+/* Forced tones (beat the theme selectors). */
+.tk-lg.tk-lg[data-tone="light"] {
+  --tk-lg-rgb: 255 255 255; --tk-lg-alpha: 0.58; --tk-lg-hi-a: 0.85; --tk-lg-shade: 12 12 16;
+  --tk-lg-shade-a: 0.1; --tk-lg-blur: 18px; --tk-lg-sat: 1.7; --tk-lg-ink: #0a0a0a;
+}
+.tk-lg.tk-lg[data-tone="dark"] {
+  --tk-lg-rgb: 26 26 30; --tk-lg-alpha: 0.55; --tk-lg-hi-a: 0.22; --tk-lg-shade: 0 0 0;
+  --tk-lg-shade-a: 0.55; --tk-lg-blur: 20px; --tk-lg-sat: 1.5; --tk-lg-ink: #fafafa;
+}
+
+/* Bars and rails: no drop shadow, just a hairline where content passes under. */
+.tk-lg--flat {
+  box-shadow:
+    inset 0 -1px 0 rgb(var(--tk-lg-shade) / calc(var(--tk-lg-shade-a) * 0.5)),
+    inset 0 1px 0 rgb(var(--tk-lg-hi) / calc(var(--tk-lg-hi-a) * 0.6));
+}
+
+/* Edge refraction (Chromium). The blur happens inside the SVG filter so the
+   displaced edge stays crisp instead of being smeared by a big CSS blur. */
+html.tk-lg-refract .tk-lg--lens {
+  -webkit-backdrop-filter: url(#tk-lg-lens) saturate(var(--tk-lg-sat));
+  backdrop-filter: url(#tk-lg-lens) saturate(var(--tk-lg-sat));
+}
+
+/* Press feedback: glass squashes like a real iOS control. */
+.tk-lg-press {
+  cursor: pointer;
+  transition:
+    transform 0.34s cubic-bezier(0.2, 1.4, 0.4, 1),
+    background-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+.tk-lg-press:active { transform: scale(0.96); }
+.tk-lg-press:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+
+@media (prefers-reduced-transparency: reduce) {
+  .tk-lg { --tk-lg-alpha: 0.96; --tk-lg-blur: 0px; --tk-lg-sat: 1; }
+  html.tk-lg-refract .tk-lg--lens { -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tk-lg-press { transition: none; }
+  .tk-lg-press:active { transform: none; }
+}
