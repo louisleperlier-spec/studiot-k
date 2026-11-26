@@ -2,7 +2,10 @@
 import { revalidatePath } from 'next/cache';
 import { store } from '@/lib/store';
 import { kindOf, saveUpload } from '@/lib/upload';
-import { NETWORKS, type Network, type NewPost, type PostStatus } from '@/lib/types';
+import { CURRENCIES, NETWORKS, REVENUE_SOURCES, type Network, type NewPost, type PostStatus } from '@/lib/types';
+import { readZipTexts } from '@/lib/zip';
+import { importTikTokTexts } from '@/lib/stats-ingest';
+import { STARTER_AUDIENCE, STARTER_CHARACTER, STARTER_FOLLOWERS, STARTER_REVENUES } from '@/lib/stats-seed';
 import { formatById, nextFreeSlot, postCaption, rampStep } from '@/lib/concepts';
 import { generateConcepts } from '@/lib/generate';
 import { formatLongFr, todayInStudio } from '@/lib/date';
@@ -146,4 +149,81 @@ export async function scheduleConcept(id: string): Promise<ActionResult> {
 export async function removeTrend(id: string) {
   await store().removeTrend(id);
   revalidatePath('/concepts');
+}
+
+/* ---------- Stats ---------- */
+
+const isDay = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s));
+
+async function characterIdFrom(form: FormData) {
+  const id = str(form, 'characterId', 64);
+  return (await store().listCharacters()).some(c => c.id === id) ? id : null;
+}
+
+export async function importTikTokAction(_prev: ActionResult, form: FormData): Promise<ActionResult> {
+  const characterId = await characterIdFrom(form);
+  if (!characterId) return { ok: false, message: 'Personnage inconnu.' };
+  const files = form.getAll('files').filter((f): f is File => f instanceof File && f.size > 0);
+  if (!files.length) return { ok: false, message: 'Choisis le zip ou les CSV exportés depuis TikTok.' };
+  const texts: { name: string; text: string }[] = [];
+  try {
+    for (const f of files) {
+      if (f.size > 10_000_000) return { ok: false, message: `${f.name} est trop lourd (10 Mo max).` };
+      const buf = Buffer.from(await f.arrayBuffer());
+      if (/\.zip$/i.test(f.name) || buf.readUInt32LE(0) === 0x04034b50) texts.push(...readZipTexts(buf));
+      else texts.push({ name: f.name, text: buf.toString('utf8') });
+    }
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : 'Lecture impossible.' };
+  }
+  const summary = await importTikTokTexts(characterId, texts);
+  if (!summary) return { ok: false, message: "Aucun export TikTok reconnu. Il faut FollowerHistory, FollowerActivity, FollowerGender ou FollowerTopTerritories." };
+  revalidatePath('/stats');
+  return { ok: true, message: `Importé : ${summary}.` };
+}
+
+export async function addFollowerAction(_prev: ActionResult, form: FormData): Promise<ActionResult> {
+  const characterId = await characterIdFrom(form);
+  const date = str(form, 'date', 10);
+  const followers = Number(str(form, 'followers', 12).replace(/[\s ]/g, ''));
+  if (!characterId) return { ok: false, message: 'Personnage inconnu.' };
+  if (!isDay(date)) return { ok: false, message: 'Date invalide.' };
+  if (!Number.isInteger(followers) || followers < 0) return { ok: false, message: "Nombre d'abonnés invalide." };
+  await store().upsertFollowers([{ characterId, date, followers, source: 'manuel' }]);
+  revalidatePath('/stats');
+  return { ok: true, message: 'Relevé enregistré.' };
+}
+
+export async function deleteFollowerAction(characterId: string, date: string) {
+  await store().deleteFollower(characterId, date);
+  revalidatePath('/stats');
+}
+
+export async function addRevenueAction(_prev: ActionResult, form: FormData): Promise<ActionResult> {
+  const date = str(form, 'date', 10);
+  const amount = Number(str(form, 'amount', 20).replace(/[\s ]/g, '').replace(',', '.'));
+  const currency = str(form, 'currency', 3).toUpperCase();
+  const source = str(form, 'source', 40);
+  const characterId = str(form, 'characterId', 64);
+  if (!isDay(date)) return { ok: false, message: 'Date invalide.' };
+  if (!Number.isFinite(amount) || amount <= 0) return { ok: false, message: 'Montant invalide.' };
+  if (!(CURRENCIES as readonly string[]).includes(currency)) return { ok: false, message: 'Devise invalide.' };
+  if (!REVENUE_SOURCES.some(s => s.id === source)) return { ok: false, message: 'Source invalide.' };
+  if (characterId && !(await characterIdFrom(form))) return { ok: false, message: 'Personnage inconnu.' };
+  await store().addRevenues([{ date, amount: Math.round(amount * 100) / 100, currency, source, characterId, note: str(form, 'note', 300), ref: '' }]);
+  revalidatePath('/stats');
+  return { ok: true, message: 'Revenu ajouté.' };
+}
+
+export async function deleteRevenueAction(id: string) {
+  await store().deleteRevenue(id);
+  revalidatePath('/stats');
+}
+
+/** One-time load of the Saint Tabarnouche figures from 19-26 Nov 2026. */
+export async function loadStarterStats() {
+  await store().upsertFollowers(STARTER_FOLLOWERS);
+  await store().saveAudience(STARTER_CHARACTER, STARTER_AUDIENCE);
+  await store().addRevenues(STARTER_REVENUES);
+  revalidatePath('/stats');
 }

@@ -4,7 +4,9 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { seedCharacters } from './seed';
-import type { Asset, Character, CharacterPatch, Concept, ConceptStatus, NewConcept, NewPost, Post, Trend } from './types';
+import type {
+  Asset, Audience, AudiencePatch, Character, CharacterPatch, Concept, ConceptStatus, FollowerPoint, NewConcept, NewPost, NewRevenue, Post, Revenue, Trend,
+} from './types';
 
 /**
  * Data layer. Uses Postgres when DATABASE_URL is set (production on Vercel),
@@ -28,7 +30,30 @@ export interface Store {
   listTrends(): Promise<Trend[]>;
   addTrend(label: string): Promise<void>;
   removeTrend(id: string): Promise<void>;
+  /** Follower counts, oldest first. */
+  listFollowers(characterId?: string): Promise<FollowerPoint[]>;
+  /** Inserts or replaces the figure for each (character, day). */
+  upsertFollowers(points: FollowerPoint[]): Promise<void>;
+  deleteFollower(characterId: string, date: string): Promise<void>;
+  getAudience(characterId: string): Promise<Audience | null>;
+  /** Merges: only the fields present in the patch are replaced. */
+  saveAudience(characterId: string, patch: AudiencePatch): Promise<void>;
+  /** Newest first. */
+  listRevenues(): Promise<Revenue[]>;
+  /** Skips entries whose non-empty ref already exists. Returns how many were added. */
+  addRevenues(list: NewRevenue[]): Promise<number>;
+  deleteRevenue(id: string): Promise<void>;
 }
+
+const emptyAudience = (characterId: string): Audience => ({
+  characterId, gender: null, territories: [], hours: [], hoursDays: 0, source: 'manuel', updatedAt: now(),
+});
+const mergeAudience = (base: Audience, p: AudiencePatch): Audience => ({
+  ...base,
+  ...Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined)),
+  updatedAt: now(),
+});
+const byRevenue = (a: Revenue, b: Revenue) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt);
 
 const newestFirst = (a: { createdAt: string }, b: { createdAt: string }) => b.createdAt.localeCompare(a.createdAt);
 
@@ -37,7 +62,10 @@ const byDateTime = (a: Post, b: Post) => (a.date + a.time).localeCompare(b.date 
 
 /* ---------------- JSON file (dev) ---------------- */
 
-interface Db { characters: Character[]; posts: Post[]; concepts?: Concept[]; trends?: Trend[] }
+interface Db {
+  characters: Character[]; posts: Post[]; concepts?: Concept[]; trends?: Trend[];
+  followers?: FollowerPoint[]; audiences?: Audience[]; revenues?: Revenue[];
+}
 
 class FileStore implements Store {
   private file = path.join(process.cwd(), '.data', 'db.json');
@@ -119,6 +147,47 @@ class FileStore implements Store {
   async removeTrend(id: string) {
     await this.mutate(db => { db.trends = (db.trends ?? []).filter(t => t.id !== id); });
   }
+  async listFollowers(characterId?: string) {
+    const all = (await this.read()).followers ?? [];
+    return all.filter(f => !characterId || f.characterId === characterId).sort((a, b) => a.date.localeCompare(b.date));
+  }
+  async upsertFollowers(points: FollowerPoint[]) {
+    await this.mutate(db => {
+      const list = (db.followers ??= []);
+      for (const p of points) {
+        const i = list.findIndex(f => f.characterId === p.characterId && f.date === p.date);
+        if (i >= 0) list[i] = { ...p }; else list.push({ ...p });
+      }
+    });
+  }
+  async deleteFollower(characterId: string, date: string) {
+    await this.mutate(db => { db.followers = (db.followers ?? []).filter(f => !(f.characterId === characterId && f.date === date)); });
+  }
+  async getAudience(characterId: string) { return (await this.read()).audiences?.find(a => a.characterId === characterId) ?? null; }
+  async saveAudience(characterId: string, patch: AudiencePatch) {
+    await this.mutate(db => {
+      const list = (db.audiences ??= []);
+      const i = list.findIndex(a => a.characterId === characterId);
+      const next = mergeAudience(i >= 0 ? list[i] : emptyAudience(characterId), patch);
+      if (i >= 0) list[i] = next; else list.push(next);
+    });
+  }
+  async listRevenues() { return [...((await this.read()).revenues ?? [])].sort(byRevenue); }
+  async addRevenues(list: NewRevenue[]) {
+    return this.mutate(db => {
+      const all = (db.revenues ??= []);
+      let n = 0;
+      for (const r of list) {
+        if (r.ref && all.some(x => x.ref === r.ref)) continue;
+        all.push({ ...r, id: randomUUID(), createdAt: now() });
+        n++;
+      }
+      return n;
+    });
+  }
+  async deleteRevenue(id: string) {
+    await this.mutate(db => { db.revenues = (db.revenues ?? []).filter(r => r.id !== id); });
+  }
 }
 
 /* ---------------- Postgres (prod) ---------------- */
@@ -151,6 +220,16 @@ class PgStore implements Store {
       await sql`create table if not exists trends (
         id uuid primary key, label text not null, created_at timestamptz not null default now())`;
       await sql`create unique index if not exists trends_label_idx on trends(lower(label))`;
+      await sql`create table if not exists followers (
+        character_id text not null, date date not null, followers integer not null, source text not null default 'manuel',
+        updated_at timestamptz not null default now(), primary key (character_id, date))`;
+      await sql`create table if not exists audiences (
+        character_id text primary key, data jsonb not null, updated_at timestamptz not null default now())`;
+      await sql`create table if not exists revenues (
+        id uuid primary key, date date not null, amount numeric(12,2) not null, currency text not null, source text not null,
+        character_id text not null default '', note text not null default '', ref text not null default '',
+        created_at timestamptz not null default now())`;
+      await sql`create unique index if not exists revenues_ref_idx on revenues(ref) where ref <> ''`;
       for (const c of seedCharacters(now())) {
         await sql`insert into characters (id, slug, name, color) values (${c.id}, ${c.slug}, ${c.name}, ${c.color}) on conflict (id) do nothing`;
       }
@@ -288,6 +367,61 @@ class PgStore implements Store {
   async removeTrend(id: string) {
     await this.init();
     await this.sql`delete from trends where id = ${id}`;
+  }
+  async listFollowers(characterId?: string) {
+    await this.init();
+    const rows = characterId
+      ? await this.sql`select character_id, to_char(date, 'YYYY-MM-DD') as date, followers, source from followers where character_id = ${characterId} order by date`
+      : await this.sql`select character_id, to_char(date, 'YYYY-MM-DD') as date, followers, source from followers order by date`;
+    return rows.map(r => ({
+      characterId: r.character_id as string, date: r.date as string, followers: Number(r.followers), source: r.source as FollowerPoint['source'],
+    }));
+  }
+  async upsertFollowers(points: FollowerPoint[]) {
+    await this.init();
+    for (const p of points) {
+      await this.sql`insert into followers (character_id, date, followers, source) values (${p.characterId}, ${p.date}, ${p.followers}, ${p.source})
+        on conflict (character_id, date) do update set followers = excluded.followers, source = excluded.source, updated_at = now()`;
+    }
+  }
+  async deleteFollower(characterId: string, date: string) {
+    await this.init();
+    await this.sql`delete from followers where character_id = ${characterId} and date = ${date}`;
+  }
+  async getAudience(characterId: string) {
+    await this.init();
+    const [r] = await this.sql`select data from audiences where character_id = ${characterId}`;
+    return r ? (r.data as Audience) : null;
+  }
+  async saveAudience(characterId: string, patch: AudiencePatch) {
+    await this.init();
+    const next = mergeAudience((await this.getAudience(characterId)) ?? emptyAudience(characterId), patch);
+    await this.sql`insert into audiences (character_id, data) values (${characterId}, ${this.sql.json(next as never)}::jsonb)
+      on conflict (character_id) do update set data = excluded.data, updated_at = now()`;
+  }
+  async listRevenues() {
+    await this.init();
+    const rows = await this.sql`select *, to_char(date, 'YYYY-MM-DD') as date from revenues order by date desc, created_at desc limit 1000`;
+    return rows.map(r => ({
+      id: r.id as string, date: r.date as string, amount: Number(r.amount), currency: r.currency as string, source: r.source as string,
+      characterId: r.character_id as string, note: r.note as string, ref: r.ref as string,
+      createdAt: new Date(r.created_at as string).toISOString(),
+    }));
+  }
+  async addRevenues(list: NewRevenue[]) {
+    await this.init();
+    let n = 0;
+    for (const r of list) {
+      const res = await this.sql`insert into revenues (id, date, amount, currency, source, character_id, note, ref)
+        values (${randomUUID()}, ${r.date}, ${r.amount}, ${r.currency}, ${r.source}, ${r.characterId}, ${r.note}, ${r.ref})
+        on conflict do nothing`;
+      n += res.count;
+    }
+    return n;
+  }
+  async deleteRevenue(id: string) {
+    await this.init();
+    await this.sql`delete from revenues where id = ${id}`;
   }
 }
 
